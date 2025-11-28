@@ -33,18 +33,23 @@ Key logic:
 4. Calls `generate_weekly_report()` from gemini_weekly_report.py
 5. Writes all reports to `weekly_reports_YYYYMMDD_HHMMSS.txt`
 
-### gemini_weekly_report.py
-Contains the `generate_weekly_report(homework_json)` function that:
-- Uses Gemini API (model: gemini-2.5-flash)
-- Takes structured JSON homework data for one student
-- Generates a teacher-like report with average score, correct/partial/unattempted counts, strengths, weaknesses, trends, and motivational messages
-- Returns formatted text report
+### Gemini Report Generators (3 versions)
 
-### gemini_weekly_report_v3.py (Optimized version)
-Includes:
-- `compress_data()` - Reduces JSON payload by keeping only recent N submissions and essential fields
-- `generate_weekly_report()` - Token-optimized version with max_output_tokens=500
+**gemini_weekly_report.py** (v1 - Production)
+- Used by main.py endpoint
+- `generate_weekly_report(homework_json)` - Sends full JSON to Gemini
+- Detailed prompt requesting 10-15 line reports with trends and parent notes
+
+**gemini_weekly_report_v2.py** (Optimized)
+- Adds `compress_data()` function to reduce token usage
+- Keeps only last 3 submissions with essential fields
+- Uses `temperature: 0.6` for balanced output
+
+**gemini_weekly_report_v3.py** (Multi-student batch)
+- `compress_data()` - Reduces JSON payload
+- `generate_weekly_report(student_name, homework_json)` - Takes student name as parameter
 - `generate_reports_for_students()` - Batch processor for multiple students
+- Uses `max_output_tokens=500` for speed
 
 ### database.py
 Database connection setup:
@@ -62,7 +67,9 @@ Required `.env` variables:
 - `WHATSAPP_ACCESS_TOKEN` - (present but not currently used in main.py)
 - `PHONE_NUMBER_ID` - (present but not currently used in main.py)
 
-**Security Note**: The Gemini API key is hardcoded in gemini_weekly_report.py. Consider moving to .env.
+**Security Note**: Credentials are hardcoded in several files:
+- `main.py` - DATABASE_URL is hardcoded (duplicates .env)
+- `gemini_weekly_report.py` and `gemini_weekly_report_v2.py` - Gemini API keys hardcoded
 
 ## Running the Application
 
@@ -91,7 +98,7 @@ curl -X POST "http://localhost:8000/generate_weekly_report/" \
 - **SQLAlchemy** - ORM and database toolkit
 - **psycopg2** - PostgreSQL adapter
 - **python-dotenv** - Environment variable management
-- **google-generativeai** - Gemini API client (not in requirements.txt but used in code)
+- **google-generativeai** - Gemini API client (**must be installed separately**: `pip install google-generativeai`)
 
 ## Common Development Tasks
 

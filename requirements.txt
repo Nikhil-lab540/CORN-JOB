@@ -18,3 +18,5 @@ starlette
 typing-inspection
 typing_extensions
 uvicorn
+reportlab
+google-generativeai

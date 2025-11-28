@@ -9,12 +9,14 @@ main.py — Multi-student Parent-Aware Version (Final, FIXED)
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, select, MetaData, or_
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import json, logging
 from gemini_weekly_report import generate_weekly_report  # your LLM function
+from pdf_generator import create_pdf_report  # PDF generation
 
 # ======================================================
 # ✅ DATABASE CONFIG
@@ -144,6 +146,127 @@ def generate_weekly_report_endpoint(request: WeeklyReportRequest):
 
     except Exception as e:
         logging.exception("Error generating report:")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        db.close()
+
+
+# ======================================================
+# ✅ ENDPOINT — WEEKLY REPORT (PDF DOWNLOAD)
+# ======================================================
+@app.post("/generate_weekly_report_pdf/")
+def generate_weekly_report_pdf_endpoint(request: WeeklyReportRequest):
+    """
+    Generate weekly reports and return as downloadable PDF.
+    """
+    db = SessionLocal()
+    try:
+        # 1. Find students linked to this phone
+        students = db.execute(
+            select(students_table)
+            .where(students_table.c.phone_number == request.mobile_number)
+        ).fetchall()
+
+        if not students:
+            raise HTTPException(status_code=404, detail="No students found for this mobile number.")
+
+        print(f"\n📱 Found {len(students)} student(s) for {request.mobile_number}")
+
+        all_student_data = {}
+
+        # 2. Loop students and fetch homework
+        for student in students:
+            student_id = student.id
+            username = student.username
+
+            print(f"\n🔍 Checking homework for {username} (ID={student_id})")
+
+            submissions = db.execute(
+                select(
+                    homework_table,
+                    students_table.c.fullname.label("student_name"),
+                    students_table.c.class_name_id.label("student_class"),
+                    students_table.c.section.label("student_section")
+                )
+                .select_from(
+                    homework_table.outerjoin(
+                        students_table,
+                        homework_table.c.student_name_id == students_table.c.id
+                    )
+                )
+                .where(
+                    or_(
+                        homework_table.c.student_name_id == student_id,
+                        homework_table.c.student_id == username
+                    )
+                )
+                .order_by(homework_table.c.id.desc())
+                .limit(5)
+            ).fetchall()
+
+            if not submissions:
+                print(f"⚠️ No homework found for {username}")
+                continue
+
+            student_json = {"data": []}
+
+            for sub in submissions:
+                parsed = None
+
+                if sub.agent_analysis_data:
+                    parsed = sub.agent_analysis_data
+                elif sub.result_json:
+                    parsed = sub.result_json
+                else:
+                    parsed = {
+                        "submission_id": sub.id,
+                        "score": sub.score,
+                        "percentage": sub.percentage,
+                        "grade": sub.grade
+                    }
+
+                if isinstance(parsed, str):
+                    try:
+                        parsed = json.loads(parsed)
+                    except:
+                        parsed = {"raw_text": parsed}
+
+                student_json["data"].append(parsed)
+
+            if student_json["data"]:
+                all_student_data[username] = student_json
+
+        if not all_student_data:
+            raise HTTPException(status_code=404, detail="No valid homework data found for any student.")
+
+        # 3. Generate Gemini reports for each student
+        student_reports = {}
+        for username, hw_json in all_student_data.items():
+            print(f"📝 Generating report for {username}...")
+            report = generate_weekly_report(hw_json)
+            student_reports[username] = report
+
+        # 4. Generate PDF
+        print("📄 Creating PDF...")
+        pdf_buffer = create_pdf_report(student_reports)
+
+        # 5. Return as downloadable PDF
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"weekly_reports_{timestamp}.pdf"
+
+        return StreamingResponse(
+            pdf_buffer,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception("Error generating PDF report:")
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
